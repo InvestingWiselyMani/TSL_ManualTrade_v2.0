@@ -1,0 +1,69 @@
+
+//@version=5
+strategy("Trail StopLoss v2.0", overlay=true)
+
+// Get user input
+exchange = input.string('NFO', 'EXCHANGE', options=['NSE', 'NFO', 'MCX', 'OTHER'])
+ts = input.string('TCS23FEBFUT', 'TRADE SYMBOL')
+qty = input.int(defval = 0, title = "Quantity", step = 5)
+barTime             = input.time(title="Bar Time", defval=timestamp("30 Aug 2023 10:30 GMT+5:30"))
+tradeType           = input.string(title="Trade Direction", defval="Long", options=["Long", "Short"])
+trailSource         = input.string(title="Trail Source", defval="Close", options=["Close", "Open"])
+
+//Set up risk : reward
+rr                  = input.float(1.5, "Risk : Reward", step=0.1, group = "Set up risk : reward")
+rAmount             = input.int(10000, "Risk Amount",  group = "Set up risk : reward")
+
+// Enter mock trade (if bar is the one we clicked on and we have no open trades or previous trades)
+if time >= barTime and strategy.position_size == 0 and strategy.closedtrades == 0
+    strategy.entry("Trade", direction = (tradeType == "Long" ? strategy.long : strategy.short))
+
+// Declare trailing price variable (stores our trail stop value)
+var float trailPrice    = na
+float next_trailPrice   = na
+float action            = na
+float StopDistance      = na
+var float takeprofitlevel   = na
+var float stoplosslevel = na
+
+// Get required trailing stop variables
+int rPoint              = rAmount/qty
+
+float currEntryPrice = strategy.opentrades.entry_price(strategy.opentrades - 1)
+
+next_trailPrice := switch trailSource
+    "Close"     => action := (strategy.position_size > 0 ? close[1] - rPoint : close[1] - currEntryPrice + (currEntryPrice + rPoint)) 
+    "Open"      => action := (strategy.position_size > 0 ? open[1] - rPoint : open[1] - currEntryPrice + (currEntryPrice + rPoint)) 
+
+stopLoss = strategy.position_size > 0 ? currEntryPrice - rPoint : rPoint + currEntryPrice
+
+// Check for trailing stop update
+if strategy.position_size != 0 and barstate.isconfirmed
+    // Trail long stop ONLY IF temp trailPrice is not set or is a higher price
+    if (next_trailPrice > trailPrice or na(trailPrice)) and strategy.position_size > 0
+        trailPrice := next_trailPrice
+        // Trigger alert
+        alert(message="Trailing Stop updated for " + syminfo.tickerid + ": " + str.tostring(trailPrice, "#.#####"), freq=alert.freq_once_per_bar_close)
+    // Trail short stop ONLY IF temp trailPrice is not set or is a lower price
+    if (next_trailPrice < trailPrice or na(trailPrice)) and strategy.position_size < 0
+        trailPrice := next_trailPrice
+        // Trigger alert
+        alert(message="Trailing Stop updated for " + syminfo.tickerid + ": " + str.tostring(trailPrice, "#.#####"), freq=alert.freq_once_per_bar_close)
+
+// Draw data to chart
+plot(strategy.position_size != 0 ? trailPrice : na, color=color.aqua, title="Trailing Stop")
+isTrue = false
+if strategy.position_size > 0 
+    StopDistance := currEntryPrice - stopLoss
+    takeprofitlevel := currEntryPrice + (StopDistance * rr)
+else
+    StopDistance := currEntryPrice - stopLoss
+    takeprofitlevel := currEntryPrice + (StopDistance * rr)
+
+
+p1=plot(strategy.position_size > 0 ? stopLoss : stopLoss, color=color.red, style=plot.style_linebr, title="SL")
+p2=plot(strategy.position_size > 0 ? takeprofitlevel : takeprofitlevel, color=color.lime, style=plot.style_linebr, title="TP")
+p3=plot(strategy.position_size > 0 ? strategy.position_avg_price : strategy.position_avg_price, color=color.silver, style=plot.style_linebr, title="Entry")
+
+// Exit trade if stop is hit
+strategy.exit(id="Trail Exit", from_entry="Trade", limit=takeprofitlevel, stop=trailPrice)
